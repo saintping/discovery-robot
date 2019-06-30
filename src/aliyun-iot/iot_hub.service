@@ -1,10 +1,12 @@
 [Unit]
 Description=aliyun iot hub
-Wants=network-online.target
-After=network.target remote-fs.target nss-lookup.target systemd-journald.socket basic.target system.slice
+After=syslog.target network.target remote-fs.target nss-lookup.target
 
 [Service]
 Type=simple
+Restart=always
+RestartSec=5
+StartLimitInterval=10
 User=pi
 Group=pi
 WorkingDirectory=/home/pi/discovery_robot/src/aliyun_iot
