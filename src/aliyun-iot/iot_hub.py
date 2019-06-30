@@ -38,7 +38,11 @@ def on_subscribe(mqttc, obj, mid, granted_qos):
 
 
 def on_message(mqttc, userdata, msg):
-    logging.info("on_message, topic: %s payload: %s" % (msg.topic, str(msg.payload)))
+    try:
+        payload = json.loads(msg.payload.decode("utf-8"), encoding="utf-8")
+        logging.info("on_message, topic: %s payload: %s" % (msg.topic, payload))
+    except:
+        logging.error("on_message, parse json failed")
 
 
 def on_log(mqttc, obj, level, string):
