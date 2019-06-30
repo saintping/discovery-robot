@@ -5,17 +5,23 @@
 # send iot voltage to aliyun iot-hub every 60 seconds
 #
 
-import hmac
+
 import json
 import sys
 import time
-from hashlib import sha1
 from uuid import getnode as get_mac
 
-import brickpi3
+try:
+    import brickpi3
+except:
+    exit(1)
 import paho.mqtt.client as mqtt
 
+import utils
 from iot_properties import *
+
+rpc_id = 0
+global_service = {"voltage_report": {"report_time": DEFAULT_IOT_HUB_REPORT_TIME, "last_report": 0}}
 
 
 # The callback for when the client receives a CONNACK response from the server.
@@ -38,11 +44,34 @@ def on_subscribe(mqttc, obj, mid, granted_qos):
 
 
 def on_message(mqttc, userdata, msg):
+    """
+    :param mqttc:
+    :param userdata:
+    :param msg:
+            sample of msg.payload as following
+            {
+                "id": 76,
+                "method": "user.get",
+                "params": {
+                    "set_voltage_report_time": 60
+                },
+                "version": "1.0"
+            }
+    :return:
+    """
     try:
         payload = json.loads(msg.payload.decode("utf-8"), encoding="utf-8")
         logging.info("on_message, topic: %s payload: %s" % (msg.topic, payload))
     except:
-        logging.error("on_message, parse json failed")
+        logging.exception("on_message, parse json failed")
+        return
+
+    try:
+        if "params" in payload:
+            if "set_voltage_report_time" in payload["params"]:
+                set_voltage_report_time(payload["params"]["set_voltage_report_time"])
+    except:
+        logging.exception("on_message, do service failed")
 
 
 def on_log(mqttc, obj, level, string):
@@ -63,8 +92,7 @@ def gen_sign_4aliyun(key, params):
         content += str(k) + str(v)
 
     logging.debug("hmacsha1: %s %s" % (key, content))
-    hmac_code = hmac.new(key.encode(encoding="utf-8"), content.encode(encoding="utf-8"), sha1)
-    return hmac_code.hexdigest()
+    return utils.hmacsha1(key, content)
 
 
 def connect_ailyun(client, username, password):
@@ -83,7 +111,10 @@ def connect_ailyun(client, username, password):
     return client
 
 
-def send_ailyun(client, params, rpc_id):
+def send_ailyun(client, params):
+    global rpc_id
+    rpc_id += 1
+
     js = {
         "id": rpc_id,
         "version": "1.0",
@@ -97,14 +128,24 @@ def send_ailyun(client, params, rpc_id):
     info.wait_for_publish()
 
 
+def set_voltage_report_time(report_time):
+    logging.info("set_voltage_report_time: %s" % report_time)
+
+    # cpu maybe too busy, avoid this
+    if report_time >= 60:
+        global_service["voltage_report"]["report_time"] = report_time
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         logging.info("Usage: %s ${device_secret}" % sys.argv[0])
         exit(1)
+
     device_secret = sys.argv[1]
 
-    logging.basicConfig(format='%(asctime)s %(process)d-%(thread)d [%(levelname)s] %(pathname)s:%(lineno)d %(message)s',
-                        level=LOG_LEVEL)
+    logging.basicConfig(filename=LOG_FILE,
+                        level=LOG_LEVEL,
+                        format="%(asctime)s %(process)d-%(thread)d [%(levelname)s] %(pathname)s:%(lineno)d %(message)s")
 
     logging.info("iot hub daemon enter")
 
@@ -123,23 +164,38 @@ if __name__ == "__main__":
     logging.info("password: " + password)
     logging.info("client_id: " + client_id)
 
-    client = mqtt.Client(client_id, True, None, mqtt.MQTTv311, "websockets")
-    connect_ailyun(client, username, password)
-
-    bp = brickpi3.BrickPi3()
-    rpc_id = 0
     try:
+        # init mqtt
+        client = mqtt.Client(client_id, True, None, mqtt.MQTTv311, "websockets")
+        connect_ailyun(client, username, password)
+        time.sleep(1)
+
+        # notify local ip
+        params = {"eth0": utils.get_ip("eth0"), "wlan0": utils.get_ip("wlan0")}
+        send_ailyun(client, params)
+
+        # init brick pi
+        bp = brickpi3.BrickPi3()
+
+        # loop
         while True:
-            # read the current voltages
-            params = {"voltage_battery": bp.get_voltage_battery(),
-                      "voltage_9v": bp.get_voltage_9v(),
-                      "voltage_5v": bp.get_voltage_5v(),
-                      "voltage_3.3v": bp.get_voltage_3v3()}
+            now = int(time.time())
 
-            rpc_id += 1
-            send_ailyun(client, params, rpc_id)
+            # check voltage time
+            if global_service["voltage_report"]["last_report"] + global_service["voltage_report"]["report_time"] <= now:
+                # read the current voltages
+                params = {"voltage_battery": bp.get_voltage_battery(),
+                          "voltage_9v": bp.get_voltage_9v(),
+                          "voltage_5v": bp.get_voltage_5v(),
+                          "voltage_3.3v": bp.get_voltage_3v3()}
 
-            time.sleep(60)
+                send_ailyun(client, params)
+                global_service["voltage_report"]["last_report"] = now
+
+            # loop time 1s
+            time.sleep(1)
+    except Exception as e:
+        logging.exception("loop exception")
     finally:
         bp.reset_all()
         client.disconnect()

@@ -1,0 +1,16 @@
+[Unit]
+Description=aliyun iot hub
+Wants=network-online.target
+After=network.target remote-fs.target nss-lookup.target systemd-journald.socket basic.target system.slice
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/discovery_robot/src/aliyun_iot
+ExecStart=/usr/bin/python3 iot_hub.py gWiEs5b0taOSUzaN8YZLqdATrohzJnPS
+ExecStop=/bin/kill -s TERM $MAINPID
+
+[Install]
+WantedBy=multi-user.target
+
